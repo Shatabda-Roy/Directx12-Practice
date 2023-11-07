@@ -1,0 +1,332 @@
+void InitializeGraphics(HWND hwnd) {
+    HRESULT result;
+
+    // create device.
+    ComPtr<IDXGIFactory2> m_factory2;
+    result = CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(&m_factory2));
+    result = m_factory2->QueryInterface(IID_PPV_ARGS(&g_factory));
+
+    std::vector<ComPtr<IDXGIAdapter1>> vAdapters;
+    uint16_t i = NULL;
+    uint16_t j = NULL;
+    ComPtr<IDXGIAdapter1> m_adapter1;
+    ComPtr<IDXGIAdapter4> m_adapter4;
+
+    while (g_factory->EnumAdapters1(i, &m_adapter1) != DXGI_ERROR_NOT_FOUND)
+    {
+        /* Store all available adapters on the system. */
+        vAdapters.push_back(m_adapter1);
+        /* Find a suitable adapter. */
+        result = D3D12CreateDevice(m_adapter1.Get(), D3D_FEATURE_LEVEL_12_0, _uuidof(ID3D12Device), nullptr);
+        /* If found/not found, continue on with listing of all the available adapters. */
+        if (SUCCEEDED(result)) {
+            /* Store the suitable adapter index. */
+            j = i;
+        }
+        i++;
+    }
+    result = vAdapters[j]->QueryInterface(IID_PPV_ARGS(&m_adapter4));
+
+    result = D3D12CreateDevice(m_adapter4.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&g_device));
+
+    // create the command queue.
+    D3D12_COMMAND_QUEUE_DESC cmdQueueDesc{};
+    cmdQueueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    cmdQueueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+    cmdQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    cmdQueueDesc.NodeMask = NULL;
+    result = g_device->CreateCommandQueue(&cmdQueueDesc, IID_PPV_ARGS(&g_commandQueue));
+
+    // create the swapchain.
+    DXGI_SWAP_CHAIN_DESC1 sd{};
+    sd.Width = NULL;
+    sd.Height = NULL;
+    sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.Stereo = FALSE;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = NULL;
+    sd.BufferCount = g_frameCount;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.Scaling = DXGI_SCALING_STRETCH;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    sd.Flags = NULL;
+
+    ComPtr<IDXGISwapChain1> m_swapChain1;
+    result = g_factory->CreateSwapChainForHwnd(g_commandQueue.Get(), hwnd, &sd, NULL, nullptr, &m_swapChain1);
+    m_swapChain1->QueryInterface(IID_PPV_ARGS(&g_swapChain));
+
+    int frameIndex = g_swapChain->GetCurrentBackBufferIndex();
+
+    // Create a render target view (RTV) descriptor heap.
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvHeapDesc.NumDescriptors = g_frameCount;
+    rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    rtvHeapDesc.NodeMask = NULL;
+
+    result = g_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&g_rtvHeap));
+    g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    UINT16 m_currentBackBuffer = NULL;
+
+    // Create frame resources (a render target view for each frame).
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(g_rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    for (int i = 0; i < g_frameCount; i++)
+    {
+        result = g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_backBuffers[i]));
+        g_device->CreateRenderTargetView(g_backBuffers[i].Get(), nullptr, rtvHandle);
+        rtvHandle.Offset(1, g_rtvDescriptorSize);
+    }
+
+
+    // Create a command allocator.
+    result = g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_commandAllocator));
+    // Create the command list.
+    g_device->CreateCommandList(NULL, D3D12_COMMAND_LIST_TYPE_DIRECT, &g_commandAllocator.Get()[frameIndex], NULL, IID_PPV_ARGS(&g_commandList));
+    // Create an empty root signature.
+    CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+    rootSignatureDesc.NumParameters = 0;
+    rootSignatureDesc.pParameters = nullptr;
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+
+    result = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    g_device->CreateRootSignature(NULL, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&g_rootSignature));
+
+    // Compile the shaders.
+    ComPtr<ID3DBlob> vertexShader;
+    ComPtr<ID3DBlob> errorBuffer;
+    result = D3DCompileFromFile(L"shaders/vert.hlsl", nullptr, nullptr, "main", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, NULL, &vertexShader, &errorBuffer);
+    if (FAILED(result)) {
+        OutputDebugString((LPCWSTR)errorBuffer->GetBufferPointer());
+    }
+    // fill out a shader bytecode structure, which is basically just a pointer
+    // to the shader bytecode and the size of the shader bytecode
+    D3D12_SHADER_BYTECODE vertexShaderBytecode = {};
+    vertexShaderBytecode.BytecodeLength = vertexShader->GetBufferSize();
+    vertexShaderBytecode.pShaderBytecode = vertexShader->GetBufferPointer();
+    ComPtr<ID3DBlob> pixelShader;
+    result = D3DCompileFromFile(L"shaders/frag.hlsl", nullptr, nullptr, "main", "ps_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, NULL, &pixelShader, &errorBuffer);
+    if (FAILED(result)) {
+        OutputDebugString((LPCWSTR)errorBuffer->GetBufferPointer());
+    }
+    // fill out shader bytecode structure for pixel shader
+    D3D12_SHADER_BYTECODE pixelShaderBytecode = {};
+    pixelShaderBytecode.BytecodeLength = pixelShader->GetBufferSize();
+    pixelShaderBytecode.pShaderBytecode = pixelShader->GetBufferPointer();
+
+    // Create the vertex input layout.
+        // The input layout is used by the Input Assembler so that it knows
+        // how to read the vertex data bound to it.
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    D3D12_INPUT_LAYOUT_DESC inputLayoutDesc{};
+    inputLayoutDesc.NumElements = sizeof(inputLayout) / sizeof(D3D12_INPUT_ELEMENT_DESC);
+    inputLayoutDesc.pInputElementDescs = inputLayout;
+
+    // Create a pipeline state object description, then create the object.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.InputLayout = inputLayoutDesc;
+    psoDesc.pRootSignature = g_rootSignature.Get();
+    psoDesc.VS = vertexShaderBytecode;
+    psoDesc.PS = pixelShaderBytecode;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE; // type of topology we are drawing
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.SampleDesc.Quality = NULL;
+    psoDesc.SampleMask = 0xffffffff; // sample mask has to do with multi-sampling. 0xffffffff means point sampling is done
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT); // a default rasterizer state.
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); // a default blent state.
+    psoDesc.NumRenderTargets = 1; // we are only binding one render target
+    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // a default depth stencil state
+    result = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelineState));
+
+    // Create and load the vertex buffers.
+    struct Vertex {
+        Vertex(float x, float y, float z, float r, float g, float b, float a) : pos(x, y, z), color(r, g, b, a) {}
+        XMFLOAT3 pos;
+        XMFLOAT4 color;
+    };
+    // a triangle
+    Vertex vList[] = {
+        // first quad (closer to camera, blue)
+        { -0.5f,  0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f },
+        {  0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f },
+        { -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f },
+        {  0.5f,  0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f },
+
+        // second quad (further from camera, green)
+        { -0.75f,  0.75f,  0.7f, 0.0f, 1.0f, 0.0f, 1.0f },
+        {   0.0f,  0.0f, 0.7f, 0.0f, 1.0f, 0.0f, 1.0f },
+        { -0.75f,  0.0f, 0.7f, 0.0f, 1.0f, 0.0f, 1.0f },
+        {   0.0f,  0.75f,  0.7f, 0.0f, 1.0f, 0.0f, 1.0f }
+    };
+
+    int vBufferSize = sizeof(vList);
+    // Create a default heap.
+    ComPtr<ID3D12Resource> vertexBuffer;
+    auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vBufferSize);
+    g_device->CreateCommittedResource(
+        &heapProp,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&vertexBuffer));
+
+    vertexBuffer->SetName(L"Vertex Buffer Resource Heap");
+    ComPtr<ID3D12Resource> vBufferUploadHeap;
+    heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    g_device->CreateCommittedResource(
+        &heapProp, // upload heap
+        D3D12_HEAP_FLAG_NONE, // no flags
+        &bufferDesc, // resource description for a buffer
+        D3D12_RESOURCE_STATE_GENERIC_READ, // GPU will read from this buffer and copy its contents to the default heap
+        nullptr,
+        IID_PPV_ARGS(&vBufferUploadHeap));
+    vBufferUploadHeap->SetName(L"Vertex Buffer Upload Resource Heap");
+
+    // store vertex buffer in upload heap
+    D3D12_SUBRESOURCE_DATA vertexData = {};
+    vertexData.pData = reinterpret_cast<BYTE*>(vList); // pointer to our vertex array
+    vertexData.RowPitch = vBufferSize; // size of all our triangle vertex data
+    vertexData.SlicePitch = vBufferSize; // also the size of our triangle vertex data
+
+    // we are now creating a command with the command list to copy the data from
+    // the upload heap to the default heap
+    UpdateSubresources(g_commandList.Get(), vertexBuffer.Get(), vBufferUploadHeap.Get(), 0, 0, 1, &vertexData);
+    // transition the vertex buffer data from copy destination state to vertex buffer state
+    auto barrierRes = CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    g_commandList->ResourceBarrier(1, &barrierRes);
+
+    // Create index buffer
+
+    // a quad (2 triangles)
+    DWORD iList[] = {
+        // first quad (blue)
+        0, 1, 2, // first triangle
+        0, 3, 1, // second triangle
+    };
+    int iBufferSize = sizeof(iList);
+
+    ComPtr<ID3D12Resource> indexBuffer;
+    // create default heap to hold index buffer
+    heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(iBufferSize);
+    g_device->CreateCommittedResource(
+        &heapProp, // a default heap
+        D3D12_HEAP_FLAG_NONE, // no flags
+        &bufferDesc, // resource description for a buffer
+        D3D12_RESOURCE_STATE_COPY_DEST, // start in the copy destination state
+        nullptr, // optimized clear value must be null for this type of resource
+        IID_PPV_ARGS(&indexBuffer));
+
+    // we can give resource heaps a name so when we debug with the graphics debugger we know what resource we are looking at
+    vertexBuffer->SetName(L"Index Buffer Resource Heap");
+    // create upload heap to upload index buffer
+    ComPtr<ID3D12Resource> iBufferUploadHeap;
+    heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vBufferSize);
+    g_device->CreateCommittedResource(
+        &heapProp, // upload heap
+        D3D12_HEAP_FLAG_NONE, // no flags
+        &bufferDesc, // resource description for a buffer
+        D3D12_RESOURCE_STATE_GENERIC_READ, // GPU will read from this buffer and copy its contents to the default heap
+        nullptr,
+        IID_PPV_ARGS(&iBufferUploadHeap));
+    vBufferUploadHeap->SetName(L"Index Buffer Upload Resource Heap");
+
+    // store vertex buffer in upload heap
+    D3D12_SUBRESOURCE_DATA indexData = {};
+    indexData.pData = reinterpret_cast<BYTE*>(iList); // pointer to our index array
+    indexData.RowPitch = iBufferSize; // size of all our index buffer
+    indexData.SlicePitch = iBufferSize; // also the size of our index buffer
+
+    // we are now creating a command with the command list to copy the data from
+    // the upload heap to the default heap
+    UpdateSubresources(g_commandList.Get(), indexBuffer.Get(), iBufferUploadHeap.Get(), 0, 0, 1, &indexData);
+
+    // transition the vertex buffer data from copy destination state to vertex buffer state
+    barrierRes = CD3DX12_RESOURCE_BARRIER::Transition(indexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    g_commandList->ResourceBarrier(1, &barrierRes);
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    dsvHeapDesc.NodeMask = NULL;
+    result = g_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&g_dsvHeap));
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC depthStencilDesc = {};
+    depthStencilDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthStencilDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    depthStencilDesc.Flags = D3D12_DSV_FLAG_NONE;
+
+    D3D12_CLEAR_VALUE depthOptimizedClearValue{};
+    depthOptimizedClearValue.Format = DXGI_FORMAT_R32_TYPELESS;
+    depthOptimizedClearValue.DepthStencil.Depth = 1.0f;
+    depthOptimizedClearValue.DepthStencil.Stencil = NULL;
+    heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_D32_FLOAT, CLIENT_WIDTH, CLIENT_HEIGHT, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    ComPtr<ID3D12Resource> depthStencilBuffer;
+    result = g_device->CreateCommittedResource(
+        &heapProp,
+        D3D12_HEAP_FLAG_NONE,
+        &texDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthOptimizedClearValue,
+        IID_PPV_ARGS(&depthStencilBuffer)
+    );
+    g_dsvHeap->SetName(L"Depth/Stencil Resource Heap");
+
+    g_device->CreateDepthStencilView(depthStencilBuffer.Get(), &depthStencilDesc, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Close the command list.
+    // Now we execute the command list to upload the initial assets (triangle data)
+    g_commandList->Close();
+    ID3D12CommandList* ppCommandLists[] = { g_commandList.Get() };
+    g_commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+    // Create a fence.
+    // increment the fence value now, otherwise the buffer might not be uploaded by the time we start drawing
+    g_fenceValue[frameIndex]++;
+    result = g_commandQueue->Signal(g_fence[frameIndex], g_fenceValue[frameIndex]);
+
+    D3D12_INDEX_BUFFER_VIEW indexBufferView; // a structure holding information about the index buffer
+
+    D3D12_VERTEX_BUFFER_VIEW vertexBufferView; // a structure containing a pointer to the vertex data in gpu memory
+    // the total size of the buffer, and the size of each element (vertex)
+
+    // create a vertex buffer view for the triangle. We get the GPU memory address to the vertex pointer using the GetGPUVirtualAddress() method
+    vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexBufferView.StrideInBytes = sizeof(Vertex);
+    vertexBufferView.SizeInBytes = vBufferSize;
+
+    // create a vertex buffer view for the triangle. We get the GPU memory address to the vertex pointer using the GetGPUVirtualAddress() method
+    indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
+    indexBufferView.Format = DXGI_FORMAT_R32_UINT; // 32-bit unsigned integer (this is what a dword is, double word, a word is 2 bytes)
+    indexBufferView.SizeInBytes = iBufferSize;
+
+    // Fill out the Viewport
+    g_viewPort.TopLeftX = 0;
+    g_viewPort.TopLeftY = 0;
+    g_viewPort.Width = CLIENT_WIDTH;
+    g_viewPort.Height = CLIENT_HEIGHT;
+    g_viewPort.MinDepth = 0.0f;
+    g_viewPort.MaxDepth = 1.0f;
+
+    // Fill out a scissor rect
+    g_scissorRect.left = 0;
+    g_scissorRect.top = 0;
+    g_scissorRect.right = CLIENT_WIDTH;
+    g_scissorRect.bottom = CLIENT_HEIGHT;
+}
+void DestoryGraphics()
+{
+    //g_debugController->Release();
+    //g_factory->Release();
+}

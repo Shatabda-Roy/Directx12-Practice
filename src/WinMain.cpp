@@ -8,8 +8,10 @@ using namespace Microsoft::WRL;
 /*------------------*/
 #pragma region Global Variables
 //            Window Settings.
- UINT16  CLIENT_WIDTH = 640;
-UINT16  CLIENT_HEIGHT = 480;
+UINT16 CLIENT_WIDTH     = 640;
+UINT16 CLIENT_HEIGHT    = 480;
+UINT16 currClientWidth  = CLIENT_WIDTH;
+UINT16 currClientHeight = CLIENT_HEIGHT;
 HICON         hIcon;
 WCHAR         windowTitle[MAX_NAME_STRING];
 WCHAR         className[MAX_NAME_STRING];
@@ -30,6 +32,9 @@ bool g_IsInitialized              = false;
 bool g_VSync                      = true;
 bool g_TearingSupported           = false;
 bool g_Fullscreen                 = false;
+float g_FoV                       = 45;
+/*The viewport and scissor rect variables are used to initialize
+the rasterizer stage of the rendering pipeline.*/
 D3D12_VIEWPORT                    g_viewPort;
 D3D12_RECT                        g_scissorRect;
 ComPtr<ID3D12Device2>             g_device;
@@ -60,9 +65,13 @@ UINT64                            g_frameFenceValues[g_frameCount] = {};
 /*A handle to an OS event object that will be used to receive the notification that the fence has reached a specific value.*/
 HANDLE                            g_fenceEvent;
 // App resources.
+/* Destination resource for the vertex buffer data and is used for rendering the cube geometry.*/
 ComPtr<ID3D12Resource>            g_vertexBuffer;
-ComPtr<ID3D12Resource>            g_depthStencilBuffer;
+ComPtr<ID3D12Resource>            g_indexBuffer;
+ComPtr<ID3D12Resource>            g_depthBuffer;
+/* Used to tell the Input Assembler stage where the vertices are stored in GPU memory.*/
 D3D12_VERTEX_BUFFER_VIEW          g_vertexBufferView;
+D3D12_INDEX_BUFFER_VIEW           g_indexBufferView;
 #pragma endregion
 /*------------------*/ 
 
@@ -90,6 +99,34 @@ void Update();
 void Render();
 void Resize(UINT32 width, UINT32 height);
 void SetFullscreen(bool fullscreen);
+void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12Resource** pDestinationResource,
+    ID3D12Resource** pIntermediateResource, size_t numElements, size_t elementSize, const void* bufferData, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE);
+void ResizeDepthBuffer(int width, int height);
+void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource,
+    D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState);
+struct VertexPosColor {
+    XMFLOAT3 Positon;
+    XMFLOAT3 Color;
+};
+static VertexPosColor g_Vertices[8] = {
+    { XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, 0.0f) }, // 0
+    { XMFLOAT3(-1.0f,  1.0f, -1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) }, // 1
+    { XMFLOAT3(1.0f,  1.0f, -1.0f),  XMFLOAT3(1.0f, 1.0f, 0.0f) }, // 2
+    { XMFLOAT3(1.0f, -1.0f, -1.0f),  XMFLOAT3(1.0f, 0.0f, 0.0f) }, // 3
+    { XMFLOAT3(-1.0f, -1.0f,  1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) }, // 4
+    { XMFLOAT3(-1.0f,  1.0f,  1.0f), XMFLOAT3(0.0f, 1.0f, 1.0f) }, // 5
+    { XMFLOAT3(1.0f,  1.0f,  1.0f),  XMFLOAT3(1.0f, 1.0f, 1.0f) }, // 6
+    { XMFLOAT3(1.0f, -1.0f,  1.0f),  XMFLOAT3(1.0f, 0.0f, 1.0f) }  // 7
+};
+static UINT16 g_Indicies[36] =
+{
+    0, 1, 2, 0, 2, 3,
+    4, 6, 5, 4, 7, 6,
+    4, 5, 1, 4, 1, 0,
+    3, 2, 6, 3, 6, 7,
+    1, 5, 6, 1, 6, 2,
+    4, 0, 3, 4, 3, 7
+};
 #pragma endregion
 /*-------------------*/
 
@@ -125,10 +162,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     MoveWindow(hwnd, X, Y, windowRect.right - windowRect.left, windowRect.bottom - windowRect.top,FALSE);
 
     EnableDebugLayer();
+    g_viewPort = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(CLIENT_WIDTH), static_cast<float>(CLIENT_HEIGHT));
+    g_scissorRect = CD3DX12_RECT(0, 0, LONG_MAX, LONG_MAX);
     /* Get GPU adapter with the heighest VRAM*/
     ComPtr<IDXGIAdapter4> adapter4 = GetAdapter(FALSE);
     /* Make a device on our selected GPU*/
     g_device = MakeDevice(adapter4);
+    /* Checking for Multisample support.*/
+    D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels{};
+    msQualityLevels.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    msQualityLevels.SampleCount = 4;
+    msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+    ThrowIfFailed(g_device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,&msQualityLevels,sizeof(msQualityLevels)));
     /* Provides methods for submitting command lists, synchronizing command list execution,
     instrumenting the command queue, and updating resource tile mappings.*/
     g_commandQueue = MakeCommandQueue(g_device, D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -155,7 +200,104 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_TearingSupported = CheckTearingSupport();
     g_fence = MakeFence(g_device);
     g_fenceEvent = MakeEventHandle();
+
+    ThrowIfFailed(g_commandList->Reset(g_commandAllocators[g_CurrentBackBufferIndex].Get(), nullptr));
+
+    /* Temporary vertex buffer resource that is used to transfer the CPU vertex buffer data to the GPU.*/
+    ComPtr<ID3D12Resource> intermediateVertexBuffer;
+    UpdateBufferResource(g_commandList.Get(), &g_vertexBuffer, &intermediateVertexBuffer,_countof(g_Vertices), sizeof(VertexPosColor), g_Vertices);
+
+    // Create the vertex buffer view.
+    g_vertexBufferView.BufferLocation = g_vertexBuffer->GetGPUVirtualAddress();
+    g_vertexBufferView.SizeInBytes = sizeof(g_Vertices);
+    g_vertexBufferView.StrideInBytes = sizeof(VertexPosColor);
+    // Upload index buffer data.
+    ComPtr<ID3D12Resource> intermediateIndexBuffer;
+    UpdateBufferResource(g_commandList.Get(), &g_indexBuffer, &intermediateIndexBuffer, _countof(g_Indicies), sizeof(WORD), g_Indicies);
+    // Create index buffer view.
+    g_indexBufferView.BufferLocation = g_indexBuffer->GetGPUVirtualAddress();
+    g_indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+    g_indexBufferView.SizeInBytes = sizeof(g_Indicies);
+    
+    // Create the descriptor heap for the depth-stencil view.
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    ThrowIfFailed(g_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&g_dsvHeap)));
+    // Load the vertex shader.
+    ComPtr<ID3DBlob> vertexShaderBlob;
+    ThrowIfFailed(D3DReadFileToBlob(L"A:/Work/DEVELOPMENT/Directx12-Practice/bin/Directx12-Practice/Debug/vert.cso", &vertexShaderBlob));
+
+    // Load the pixel shader.
+    ComPtr<ID3DBlob> pixelShaderBlob;
+    ThrowIfFailed(D3DReadFileToBlob(L"A:/Work/DEVELOPMENT/Directx12-Practice/bin/Directx12-Practice/Debug/frag.cso", &pixelShaderBlob));
+    // Create the vertex input layout
+    D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+    // Create a root signature.
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+    featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+    if (FAILED(g_device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData))))
+    {
+        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+    }
+    // Allow input layout and deny unnecessary access to certain pipeline stages.
+    D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
+    // A single 32-bit constant root parameter that is used by the vertex shader.
+    CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+    rootParameters[0].InitAsConstants(sizeof(XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDescription;
+    rootSignatureDescription.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr, rootSignatureFlags);
+    // Serialize the root signature.
+    ComPtr<ID3DBlob> rootSignatureBlob;
+    ComPtr<ID3DBlob> errorBlob;
+    ThrowIfFailed(D3DX12SerializeVersionedRootSignature(&rootSignatureDescription,
+        featureData.HighestVersion, &rootSignatureBlob, &errorBlob));
+    // Create the root signature.
+    ThrowIfFailed(g_device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(),
+        rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&g_rootSignature)));
+    struct PipelineStateStream
+    {
+        CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE pRootSignature;
+        CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT InputLayout;
+        CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY PrimitiveTopologyType;
+        CD3DX12_PIPELINE_STATE_STREAM_VS VS;
+        CD3DX12_PIPELINE_STATE_STREAM_PS PS;
+        CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL_FORMAT DSVFormat;
+        CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS RTVFormats;
+    } pipelineStateStream;
+
+    D3D12_RT_FORMAT_ARRAY rtvFormats = {};
+    rtvFormats.NumRenderTargets = 1;
+    rtvFormats.RTFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    pipelineStateStream.pRootSignature = g_rootSignature.Get();
+    pipelineStateStream.InputLayout = { inputLayout, _countof(inputLayout) };
+    pipelineStateStream.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pipelineStateStream.VS = CD3DX12_SHADER_BYTECODE(vertexShaderBlob.Get());
+    pipelineStateStream.PS = CD3DX12_SHADER_BYTECODE(pixelShaderBlob.Get());
+    pipelineStateStream.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    pipelineStateStream.RTVFormats = rtvFormats;
+
+    D3D12_PIPELINE_STATE_STREAM_DESC pipelineStateStreamDesc = { sizeof(PipelineStateStream), &pipelineStateStream };
+    ThrowIfFailed(g_device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&g_pipelineState)));
+    ThrowIfFailed(g_commandList->Close());
+    ID3D12CommandList* const commandLists[] = {
+    g_commandList.Get()
+    };
+    g_commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+    Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
+
     g_IsInitialized = TRUE;
+    ResizeDepthBuffer(CLIENT_WIDTH, CLIENT_HEIGHT);
     ShowWindow(hwnd, nCmdShow);
     //UpdateWindow(hwnd);
     MSG msg = { };
@@ -215,7 +357,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             int width = clientRect.right - clientRect.left;
             int height = clientRect.bottom - clientRect.top;
-
+            currClientWidth = width;
+            currClientHeight = height;
             Resize(width, height);
         }
         break;
@@ -285,7 +428,7 @@ ComPtr<ID3D12Device2> MakeDevice(ComPtr<IDXGIAdapter4> adapter)
     if (SUCCEEDED(device2.As(&pInfoQueue))) {
         pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
         pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-        pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+        //pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
 
         // Suppress messages based on their severity level
         D3D12_MESSAGE_SEVERITY Severities[] =
@@ -438,7 +581,9 @@ void Flush(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence, U
     UINT64 fenceValueForSignal = Signal(commandQueue, fence, fenceValue);
     WaitForFenceValue(fence, fenceValueForSignal, fenceEvent);
 }
-
+DirectX::XMMATRIX g_ProjectionMatrix;
+DirectX::XMMATRIX g_ViewMatrix;
+DirectX::XMMATRIX g_ModelMatrix;
 void Update()
 {
     static UINT64 frameCounter = NULL;
@@ -461,6 +606,20 @@ void Update()
         frameCounter = NULL;
         elapsedSeconds = NULL;
     }
+    // Update the model matrix.
+    float angle = static_cast<float>(elapsedSeconds * 90.0);
+    const XMVECTOR rotationAxis = XMVectorSet(0, 1, 1, 0);
+    g_ModelMatrix = XMMatrixRotationAxis(rotationAxis, XMConvertToRadians(angle));
+
+    // Update the view matrix.
+    const XMVECTOR eyePosition = XMVectorSet(0, 0, -10, 1);
+    const XMVECTOR focusPoint = XMVectorSet(0, 0, 0, 1);
+    const XMVECTOR upDirection = XMVectorSet(0, 1, 0, 0);
+    g_ViewMatrix = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+
+    // Update the projection matrix.
+    float aspectRatio = currClientWidth / static_cast<float>(currClientHeight);
+    g_ProjectionMatrix = XMMatrixPerspectiveFovLH(XMConvertToRadians(g_FoV), aspectRatio, 0.1f, 100.0f);
 }
 
 void Render()
@@ -480,8 +639,27 @@ void Render()
         FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(g_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
             g_CurrentBackBufferIndex, g_rtvDescriptorSize);
+        CD3DX12_CPU_DESCRIPTOR_HANDLE dsv(g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
-        g_commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+        g_commandList->ClearRenderTargetView(rtv, clearColor, NULL, nullptr);
+        g_commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1, NULL, NULL, nullptr);
+        /*The next step is to prepare the rendering pipeline for rendering.*/
+        g_commandList->SetPipelineState(g_pipelineState.Get());
+        /*Not explicitly setting the root signature on the command list
+        will result in a runtime error while trying to bind resources.*/
+        g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
+        g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
+        g_commandList->IASetIndexBuffer(&g_indexBufferView);
+        g_commandList->RSSetViewports(1, &g_viewPort);
+        /*the scissor rectangle must be explicitly specified */
+        g_commandList->RSSetScissorRects(1, &g_scissorRect);
+        g_commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+        // Update the MVP matrix
+        XMMATRIX mvpMatrix = XMMatrixMultiply(g_ModelMatrix, g_ViewMatrix);
+        mvpMatrix = XMMatrixMultiply(mvpMatrix, g_ProjectionMatrix);
+        g_commandList->SetGraphicsRoot32BitConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix, 0);
+        g_commandList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
     }
     // Present
     {
@@ -495,8 +673,8 @@ void Render()
             g_commandList.Get()
         };
         g_commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
-        UINT syncInterval = g_VSync ? 1 : 0;
-        UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        UINT syncInterval = g_VSync ? 1 : NULL;
+        UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : NULL;
         ThrowIfFailed(g_swapChain->Present(syncInterval, presentFlags));
 
         g_frameFenceValues[g_CurrentBackBufferIndex] = Signal(g_commandQueue, g_fence, g_fenceValue);
@@ -504,6 +682,22 @@ void Render()
 
         WaitForFenceValue(g_fence, g_frameFenceValues[g_CurrentBackBufferIndex], g_fenceEvent);
     }
+    /*
+    Clear the color and depth buffers
+    For each object in the scene:
+        Transition any resources to the required state
+        Bind the Pipeline State Object (PSO)
+        Bind the Root Signature
+        Bind any resources (CBV, UAV, SRV, Samplers, etc..) to the shader stages
+        Set the primitive topology for the Input Assembler (IA)
+        Bind the vertex buffer to the IA
+        Bind the index buffer to the IA
+        Set the viewport(s) for the Rasterizer Stage (RS)
+        Set the scissor rectangle(s) for the RS
+        Bind the color and depth-stencil render targets to the Output Merger (OM)
+        Draw the geometry
+    Present the rendered image to the screen
+*/
 }
 
 void Resize(UINT32 width, UINT32 height)
@@ -532,6 +726,8 @@ void Resize(UINT32 width, UINT32 height)
         g_CurrentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
 
         UpdateRenderTargetViews(g_device.Get(), g_swapChain, g_rtvHeap);
+        g_viewPort = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+        ResizeDepthBuffer(width, height);
     }
 }
 
@@ -582,4 +778,70 @@ void SetFullscreen(bool fullscreen)
             ::ShowWindow(hwnd, SW_NORMAL);
         }
     }
+}
+
+void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12Resource** pDestinationResource, ID3D12Resource** pIntermediateResource, size_t numElements, size_t elementSize, const void* bufferData, D3D12_RESOURCE_FLAGS flags)
+{
+    size_t bufferSize = numElements * elementSize;
+    auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto buffer = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, flags);
+    // Create a committed resource for the GPU resource in a default heap.
+    ThrowIfFailed(g_device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &buffer,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(pDestinationResource)));
+    // Create an committed resource for the upload.
+    if (bufferData != NULL)
+    {
+        heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        buffer = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
+        ThrowIfFailed(g_device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE,
+            &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(pIntermediateResource)));
+        D3D12_SUBRESOURCE_DATA subresourceData = {};
+        subresourceData.pData = bufferData;
+        subresourceData.RowPitch = bufferSize;
+        subresourceData.SlicePitch = subresourceData.RowPitch;
+        UpdateSubresources(commandList.Get(), *pDestinationResource, *pIntermediateResource, 0, 0, 1, &subresourceData);
+    }
+}
+
+void ResizeDepthBuffer(int width, int height)
+{
+    if (g_IsInitialized) {
+        /* Ensure that there are no command lists that could be referencing the current depth buffer are “in-flight” on the command queue.*/
+        Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
+        /*If the window is minimized, it is possible that either the width or the height of the client area of the window becomes 0. 
+        Creating a resource with a 0 size is an error so to prevent the buffer from being created with a 0 size,
+        the width and height are clamped to a size of at least 1 in both dimensions.*/
+        width = std::max(1, width);
+        height = std::max(1, height);
+        // Resize screen dependent resources.
+        // Create a depth buffer.
+        D3D12_CLEAR_VALUE optimizedClearValue = {};
+        optimizedClearValue.Format = DXGI_FORMAT_D32_FLOAT;
+        optimizedClearValue.DepthStencil = { 1.0f, 0 };
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto texBuffer = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_D32_FLOAT, width, height,
+            1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        ThrowIfFailed(g_device->CreateCommittedResource(
+            &heapProp,
+            D3D12_HEAP_FLAG_NONE,
+            &texBuffer,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            &optimizedClearValue,
+            IID_PPV_ARGS(&g_depthBuffer)
+        ));
+        // Update the depth-stencil view.
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
+        dsv.Format = DXGI_FORMAT_D32_FLOAT;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsv.Texture2D.MipSlice = NULL;
+        dsv.Flags = D3D12_DSV_FLAG_NONE;
+
+        g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsv, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+    }
+}
+
+void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource, D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState)
+{
+    CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource.Get(),beforeState, afterState);
+    commandList->ResourceBarrier(1, &barrier);
 }

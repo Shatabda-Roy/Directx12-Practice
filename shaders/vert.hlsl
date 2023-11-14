@@ -1,29 +1,28 @@
-cbuffer ModelViewProjectionConstantBuffer : register(b0) {
-	matrix mWorld;     // World matrix for object.
-	matrix View; 	   // View matrix
-	matrix Projection; // Projection matrix.
-}
-struct VS_INPUT {
-	float3 vPos   : POSITION;
-	float4 vColor : COLOR;
-};
-
-struct VS_OUTPUT {
-	float4 Position : SV_Position;
-	float4 Color    : COLOR;
-};
-
-VS_OUTPUT main(VS_INPUT input)
+struct ModelViewProjection
 {
-	VS_OUTPUT Output;
-	float4 pos = float4(input.vPos,1.0f);
-	// Transform the position from object space to homogeneous projection space.
-	pos = mul(pos,mWorld);
-	pos = mul(pos, View);
-	pos = mul(pos,Projection);
-	Output.Position = pos;
-	// just pass through the data.
-	Output.Color = input.vColor;
+    matrix MVP;
+};
 
-	return Output;
+ConstantBuffer<ModelViewProjection> ModelViewProjectionCB : register(b0);
+
+struct VertexPosColor
+{
+    float3 Position : POSITION;
+    float3 Color : COLOR;
+};
+
+struct VertexShaderOutput
+{
+    float4 Color : COLOR;
+    float4 Position : SV_Position;
+};
+
+VertexShaderOutput main(VertexPosColor IN)
+{
+    VertexShaderOutput OUT;
+
+    OUT.Position = mul(ModelViewProjectionCB.MVP, float4(IN.Position, 1.0f));
+    OUT.Color = float4(IN.Color, 1.0f);
+
+    return OUT;
 }

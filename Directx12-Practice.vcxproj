@@ -12,6 +12,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\AppTime.cpp" />
     <ClCompile Include="src\pch.cpp" />
     <ClCompile Include="src\WinMain.cpp" />
   </ItemGroup>
@@ -19,6 +20,7 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\AppTime.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="src\pch.hpp" />
   </ItemGroup>

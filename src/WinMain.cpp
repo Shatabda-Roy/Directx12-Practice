@@ -1,5 +1,6 @@
 /* WRITTEN BY SHATABDA ROY. */
 #include "pch.hpp"
+#include "AppTime.h"
 #define MAX_NAME_STRING 256
 using namespace DirectX;
 using namespace Microsoft::WRL;
@@ -17,6 +18,7 @@ HICON         hIcon;
 WCHAR         windowTitle[MAX_NAME_STRING];
 WCHAR         className[MAX_NAME_STRING];
 HWND          hwnd;
+BOOL          g_shouldClose;
 /*Window rectangle(used to toggle fullscreen state).
  used to store the previous window dimensions before going to fullscreen mode.*/
 RECT g_WindowRect;
@@ -34,6 +36,11 @@ bool g_VSync                      = true;
 bool g_TearingSupported           = false;
 bool g_Fullscreen                 = false;
 float g_FoV                       = 45;
+bool g_enableMsaa                 = false;
+bool g_appPaused                  = false;
+bool g_resizing                   = false;
+UINT                              g_m4xMsaaQuality;
+Apparatus::Time                   g_time;
 /*The viewport and scissor rect variables are used to initialize
 the rasterizer stage of the rendering pipeline.*/
 D3D12_VIEWPORT                    g_viewPort;
@@ -105,6 +112,7 @@ void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12R
 void ResizeDepthBuffer(int width, int height);
 void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource,
     D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState);
+void CalculateFrameStats();
 struct VertexPosColor {
     XMFLOAT3 Positon;
     XMFLOAT3 Color;
@@ -175,6 +183,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     msQualityLevels.SampleCount = 4;
     msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
     ThrowIfFailed(g_device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,&msQualityLevels,sizeof(msQualityLevels)));
+    g_m4xMsaaQuality = msQualityLevels.NumQualityLevels;
+    assert(g_m4xMsaaQuality > NULL && "Unexpected MSAA quality level.");
     /* Provides methods for submitting command lists, synchronizing command list execution,
     instrumenting the command queue, and updating resource tile mappings.*/
     g_commandQueue = MakeCommandQueue(g_device, D3D12_COMMAND_LIST_TYPE_DIRECT);
@@ -300,12 +310,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_IsInitialized = TRUE;
     ResizeDepthBuffer(CLIENT_WIDTH, CLIENT_HEIGHT);
     ShowWindow(hwnd, nCmdShow);
-    //UpdateWindow(hwnd);
+    g_time.Reset();
     MSG msg = { };
-    while (GetMessage(&msg, NULL, 0, 0) > 0)
+    while (!g_shouldClose)
     {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        g_time.Tick();
+        if (PeekMessage(&msg, hwnd, NULL, NULL, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        CalculateFrameStats();
+
+        if (g_appPaused) {
+            Sleep(100);
+        }
     }
     // Make sure the command queue has finished all commands before closing.
     Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
@@ -313,70 +331,96 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     ::CloseHandle(g_fenceEvent);
 	return EXIT_SUCCESS;
 }
+void CalculateFrameStats() {
+    // Code computes the average frames per second, and also the
+    // average time it takes to render one frame. These stats
+    // are appended to the window caption bar.
+    static int frameCount{};
+    static float timeElapsed{};
+    frameCount++;
+    if ((g_time.TotalTime() - timeElapsed) >= 1) {
+        float fps = (float)frameCount;
+        float mspf = 1000 / fps;
+        std::wstring mspfStr = std::to_wstring(mspf);
+        std::wstring fpsStr = std::to_wstring(frameCount);
+        std::wstring windowText = (std::wstring)windowTitle + L" " + L"FPS : " + fpsStr + L" " + L"MSPF: " + mspfStr;
+        SetWindowText(hwnd, windowText.c_str());
+        auto nig = GetLastError();
+        //reset for average
+        frameCount = NULL;
+        timeElapsed += 1;
+    }
+}
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    if (g_IsInitialized)
+if (g_IsInitialized)
+{
+    switch (uMsg)
     {
-        switch (uMsg)
-        {
-        case WM_PAINT:
-            Update();
-            Render();
-            break;
-        case WM_SYSKEYDOWN:
-        case WM_KEYDOWN:
-        {
-            bool alt = (::GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-
-            switch (wParam)
-            {
-            case 'V':
-                g_VSync = !g_VSync;
-                break;
-            case VK_ESCAPE:
-                ::PostQuitMessage(0);
-                break;
-            case VK_RETURN:
-                if (alt)
-                {
-            case VK_F11:
-                SetFullscreen(!g_Fullscreen);
-                }
-                break;
-            }
-        }
+    case WM_PAINT:
+        Update();
+        Render();
         break;
-        // The default window procedure will play a system notification sound 
-        // when pressing the Alt+Enter keyboard combination if this message is 
-        // not handled.
-        case WM_SYSCHAR:
-            break;
-        case WM_SIZE:
-        {
-            RECT clientRect = {};
-            ::GetClientRect(hwnd, &clientRect);
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN:
+    {
+        bool alt = (::GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
-            int width = clientRect.right - clientRect.left;
-            int height = clientRect.bottom - clientRect.top;
-            currClientWidth = width;
-            currClientHeight = height;
-            Resize(width, height);
-        }
-        break;
-        case WM_DESTROY:
+        switch (wParam)
+        {
+        case 'V':
+            g_VSync = !g_VSync;
+            break;
+        case VK_ESCAPE:
             ::PostQuitMessage(0);
             break;
-        default:
-            return ::DefWindowProcW(hwnd, uMsg, wParam, lParam);
         }
     }
-    else
+    break;
+    case WM_SIZE:
     {
+        RECT clientRect = {};
+        ::GetClientRect(hwnd, &clientRect);
+
+        int width = clientRect.right - clientRect.left;
+        int height = clientRect.bottom - clientRect.top;
+        currClientWidth = width;
+        currClientHeight = height;
+        Resize(width, height);
+    }
+    break;
+    case WM_ENTERSIZEMOVE:
+        g_appPaused = true;
+        g_resizing = true;
+        g_time.Stop();
+        return 0;
+    case WM_EXITSIZEMOVE:
+        g_appPaused = false;
+        g_resizing = false;
+        g_time.Start();
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            g_appPaused = true;
+            g_time.Stop();
+        }
+        else {
+            g_appPaused = false;
+            g_time.Start();
+        }
+        return 0;
+    case WM_CLOSE:
+        ::PostQuitMessage(0);
+        g_shouldClose = TRUE;
+        break;
+    default:
         return ::DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
-
-    return 0;
 }
+else
+{ return ::DefWindowProcW(hwnd, uMsg, wParam, lParam); }
+}
+
 void EnableDebugLayer()
 {
     ComPtr<ID3D12Debug6> m_debugInterface;
@@ -488,7 +532,7 @@ ComPtr<IDXGISwapChain4> MakeSwapChain(HWND hwnd, ComPtr<ID3D12CommandQueue> comm
     swapChainDesc.Flags = CheckTearingSupport() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : NULL;
     ThrowIfFailed(factory->CreateSwapChainForHwnd(commandQueue.Get(), hwnd, &swapChainDesc, nullptr, nullptr, &swapChain1));
     ThrowIfFailed(swapChain1.As(&swapChain4));
-    //factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+    factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
     return swapChain4;
 }
 
@@ -501,7 +545,7 @@ ComPtr<ID3D12DescriptorHeap> MakeDescriptorHeap(ComPtr<ID3D12Device2> device, D3
     ThrowIfFailed(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&descriptorHeap)));
     return descriptorHeap;
 }
-
+/* Create an RTV to each buffer in the swap chain. */
 void UpdateRenderTargetViews(ComPtr<ID3D12Device2> device, ComPtr<IDXGISwapChain4> swapChain, ComPtr<ID3D12DescriptorHeap> descriptorHeap)
 {
     auto rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -601,8 +645,8 @@ void Update()
     {
         char buffer[500];
         auto fps = frameCounter / elapsedSeconds;
-        sprintf_s(buffer, 500, "FPS: %f\n", fps);
-        OutputDebugString((LPCWSTR)buffer);
+        //sprintf_s(buffer, 500, "FPS: %f\n", fps);
+        //OutputDebugString((LPCWSTR)buffer);
 
         frameCounter = NULL;
         elapsedSeconds = NULL;
@@ -781,7 +825,8 @@ void SetFullscreen(bool fullscreen)
     }
 }
 
-void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12Resource** pDestinationResource, ID3D12Resource** pIntermediateResource, size_t numElements, size_t elementSize, const void* bufferData, D3D12_RESOURCE_FLAGS flags)
+void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12Resource** pDestinationResource,
+    ID3D12Resource** pIntermediateResource, size_t numElements, size_t elementSize, const void* bufferData, D3D12_RESOURCE_FLAGS flags)
 {
     size_t bufferSize = numElements * elementSize;
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);

@@ -22,7 +22,8 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
-
+#include <string>
+#include <cmath>
     // Helper class for COM exceptions
     class com_exception : public std::exception
     {

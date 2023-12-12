@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.props" Condition="Exists('packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.props')" />
   <ItemGroup Label="ProjectConfigurations">
@@ -12,17 +12,89 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\AppTime.cpp" />
-    <ClCompile Include="src\pch.cpp" />
-    <ClCompile Include="src\WinMain.cpp" />
+    <ClCompile Include="src\Application.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="src\EntryPoint.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="src\AppWindow.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="packages\ImGui.Docking.1.88.1\build\native\backends\imgui_impl_dx12.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="packages\ImGui.Docking.1.88.1\build\native\backends\imgui_impl_win32.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="packages\ImGui.Docking.1.88.1\build\native\examples\example_win32_directx12\main.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="packages\ImGui.Docking.1.88.1\build\native\imgui.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="packages\ImGui.Docking.1.88.1\build\native\imgui_demo.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="src\AppTime.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+      </PrecompiledHeaderFile>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+      </PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="src\CommandQueue.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">pch.h</PrecompiledHeaderFile>
+    </ClCompile>
+    <ClCompile Include="src\pch.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\Application.h" />
+    <ClInclude Include="src\AppWindow.h" />
+    <ClInclude Include="src\CommandQueue.h" />
+    <ClInclude Include="src\Helpers.h" />
+    <ClInclude Include="src\Defines.h" />
+    <ClInclude Include="packages\ImGui.Docking.1.88.1\build\native\backends\imgui_impl_dx12.h" />
+    <ClInclude Include="packages\ImGui.Docking.1.88.1\build\native\backends\imgui_impl_win32.h" />
+    <ClInclude Include="packages\ImGui.Docking.1.88.1\build\native\imgui.h" />
     <ClInclude Include="src\AppTime.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="src\pch.hpp" />
+    <ClInclude Include="src\ErrorHelpers.h" />
+    <ClInclude Include="src\pch.h" />
+    <ClInclude Include="src\GlobalVariables.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Directx12-Practice.rc" />
@@ -30,7 +102,7 @@
   <ItemGroup>
     <Image Include="common\Icons\code_image.png" />
     <Image Include="common\Icons\d_cube_scan_icon_257072.ico" />
-    <Image Include="icon1.ico" />
+    <Image Include="common\Icons\X_logo.ico" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\frag.hlsl">
@@ -90,11 +162,11 @@
       <ConformanceMode>true</ConformanceMode>
       <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
       <FloatingPointModel>Fast</FloatingPointModel>
-      <AdditionalIncludeDirectories>A:\Work\DEVELOPMENT\Directx12-Practice\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <PrecompiledHeader>Create</PrecompiledHeader>
-      <PrecompiledHeaderFile>pch.hpp</PrecompiledHeaderFile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -113,6 +185,8 @@
       <ConformanceMode>true</ConformanceMode>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Fast</FloatingPointModel>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -125,6 +199,8 @@
   <ImportGroup Label="ExtensionTargets">
     <Import Project="packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.targets" Condition="Exists('packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.targets')" />
     <Import Project="packages\directxmath.2022.12.12.1\build\native\directxmath.targets" Condition="Exists('packages\directxmath.2022.12.12.1\build\native\directxmath.targets')" />
+    <Import Project="packages\ImGui.Docking.1.88.1\build\native\imgui.docking.targets" Condition="Exists('packages\ImGui.Docking.1.88.1\build\native\imgui.docking.targets')" />
+    <Import Project="packages\directxtk12_uwp.2023.10.31.1\build\native\directxtk12_uwp.targets" Condition="Exists('packages\directxtk12_uwp.2023.10.31.1\build\native\directxtk12_uwp.targets')" />
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
@@ -133,5 +209,7 @@
     <Error Condition="!Exists('packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.props'))" />
     <Error Condition="!Exists('packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Direct3D.D3D12.1.611.0\build\native\Microsoft.Direct3D.D3D12.targets'))" />
     <Error Condition="!Exists('packages\directxmath.2022.12.12.1\build\native\directxmath.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\directxmath.2022.12.12.1\build\native\directxmath.targets'))" />
+    <Error Condition="!Exists('packages\ImGui.Docking.1.88.1\build\native\imgui.docking.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\ImGui.Docking.1.88.1\build\native\imgui.docking.targets'))" />
+    <Error Condition="!Exists('packages\directxtk12_uwp.2023.10.31.1\build\native\directxtk12_uwp.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\directxtk12_uwp.2023.10.31.1\build\native\directxtk12_uwp.targets'))" />
   </Target>
 </Project>

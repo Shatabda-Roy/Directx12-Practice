@@ -1,88 +1,15 @@
-/* WRITTEN BY SHATABDA ROY. */
-#include "pch.hpp"
+#include "pch.h"
 #include "AppTime.h"
+#include "imgui.h"
+#include "backends/imgui_impl_win32.h"
+#include "backends/imgui_impl_dx12.h"
+#include "ScreenGrab.h"
+
 #define MAX_NAME_STRING 256
 using namespace DirectX;
 using namespace Microsoft::WRL;
-
-/*------------------*/
-/* Global Variables */
-/*------------------*/
-#pragma region Global Variables
-//            Window Settings.
-UINT16 CLIENT_WIDTH     = 640;
-UINT16 CLIENT_HEIGHT    = 480;
-UINT16 currClientWidth  = CLIENT_WIDTH;
-UINT16 currClientHeight = CLIENT_HEIGHT;
-HICON         hIcon;
-WCHAR         windowTitle[MAX_NAME_STRING];
-WCHAR         className[MAX_NAME_STRING];
-HWND          hwnd;
-BOOL          g_shouldClose;
-/*Window rectangle(used to toggle fullscreen state).
- used to store the previous window dimensions before going to fullscreen mode.*/
-RECT g_WindowRect;
-
-//                                Pipeline Objects.
-
-/* The number of swap chain back buffers*/
-static const UINT16 
-g_frameCount                        = 2;
-/* Use WARP adapter*/
-bool g_useWarp                    = false;
-/*Set to true once the DX12 objects have been initialized.*/ 
-bool g_IsInitialized              = false;
-bool g_VSync                      = true;
-bool g_TearingSupported           = false;
-bool g_Fullscreen                 = false;
-float g_FoV                       = 45;
-bool g_enableMsaa                 = false;
-bool g_appPaused                  = false;
-bool g_resizing                   = false;
-UINT                              g_m4xMsaaQuality;
-Apparatus::Time                   g_time;
-/*The viewport and scissor rect variables are used to initialize
-the rasterizer stage of the rendering pipeline.*/
-D3D12_VIEWPORT                    g_viewPort;
-D3D12_RECT                        g_scissorRect;
-ComPtr<ID3D12Device2>             g_device;
-ComPtr<ID3D12Resource>            g_backBuffers[g_frameCount];
-/*There must be at least one command allocator per render frame*/
-ComPtr<ID3D12CommandAllocator>    g_commandAllocators[g_frameCount];
-ComPtr<ID3D12CommandQueue>        g_commandQueue;
-ComPtr<ID3D12RootSignature>       g_rootSignature;
-/*A descriptor heap can be visualized as an array of descriptors (views).
-A view simply describes a resource that resides in GPU memory.*/
-ComPtr<ID3D12DescriptorHeap>      g_rtvHeap;
-ComPtr<ID3D12DescriptorHeap>      g_dsvHeap;
-ComPtr<ID3D12PipelineState>       g_pipelineState;
-ComPtr<ID3D12GraphicsCommandList> g_commandList;
-ComPtr<IDXGISwapChain4>           g_swapChain;
-ComPtr<IDXGIFactory7>             g_factory;
-/*In order to correctly offset the index into the descriptor heap,
-the size of a single element in the descriptor heap needs to be queried during initialization*/
-UINT                              g_rtvDescriptorSize;
-/*Depending on the flip model of the swap chain,
-the index of the current back buffer in the swap chain may not be sequential.*/
-UINT                              g_CurrentBackBufferIndex;
-//                                Synchronization objects
-ComPtr<ID3D12Fence>               g_fence;
-UINT64                            g_fenceValue = NULL;
-/*Used to keep track of the fence values that were used to signal the command queue for a particular frame.*/
-UINT64                            g_frameFenceValues[g_frameCount] = {};
-/*A handle to an OS event object that will be used to receive the notification that the fence has reached a specific value.*/
-HANDLE                            g_fenceEvent;
-// App resources.
-/* Destination resource for the vertex buffer data and is used for rendering the cube geometry.*/
-ComPtr<ID3D12Resource>            g_vertexBuffer;
-ComPtr<ID3D12Resource>            g_indexBuffer;
-ComPtr<ID3D12Resource>            g_depthBuffer;
-/* Used to tell the Input Assembler stage where the vertices are stored in GPU memory.*/
-D3D12_VERTEX_BUFFER_VIEW          g_vertexBufferView;
-D3D12_INDEX_BUFFER_VIEW           g_indexBufferView;
-#pragma endregion
-/*------------------*/ 
-
+#include "GlobalVariables.h"
+#include "CommandQueue.h"
 /*-------------------*/
 /*Function Prototypes*/
 /*-------------------*/
@@ -93,7 +20,7 @@ ComPtr<IDXGIAdapter4> GetAdapter(bool useWarp);
 ComPtr<ID3D12Device2> MakeDevice(ComPtr<IDXGIAdapter4> adapter);
 ComPtr<ID3D12CommandQueue> MakeCommandQueue(ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type);
 ComPtr<IDXGISwapChain4> MakeSwapChain(HWND hwnd, ComPtr<ID3D12CommandQueue> commandQueue, UINT32 width, UINT32 height, UINT32 bufferCount);
-ComPtr <ID3D12DescriptorHeap> MakeDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT32 numDescriptors);
+ComPtr<ID3D12DescriptorHeap> MakeDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT32 numDescriptors,D3D12_DESCRIPTOR_HEAP_FLAGS flags);
 void UpdateRenderTargetViews(ComPtr<ID3D12Device2> device, ComPtr<IDXGISwapChain4> swapChain, ComPtr<ID3D12DescriptorHeap> descriptorHeap);
 bool CheckTearingSupport();
 ComPtr<ID3D12CommandAllocator> MakeCommandAllocator(ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type);
@@ -110,9 +37,10 @@ void SetFullscreen(bool fullscreen);
 void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12Resource** pDestinationResource,
     ID3D12Resource** pIntermediateResource, size_t numElements, size_t elementSize, const void* bufferData, D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE);
 void ResizeDepthBuffer(int width, int height);
-void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource,
+void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource,
     D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState);
 void CalculateFrameStats();
+UINT CalcConstantBufferByteSize(UINT byteSize);
 struct VertexPosColor {
     XMFLOAT3 Positon;
     XMFLOAT3 Color;
@@ -191,9 +119,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     /* Swap chains control the back buffer rotation.*/
     g_swapChain = MakeSwapChain(hwnd, g_commandQueue, NULL, NULL, g_frameCount);
     /* Returns the index of the current back buffer to the app.*/
-    g_CurrentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
+    g_currentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
     /* A descriptor heap is a collection of contiguous allocations of descriptors, one allocation for every descriptor.*/
-    g_rtvHeap = MakeDescriptorHeap(g_device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, g_frameCount);
+    g_rtvHeap = MakeDescriptorHeap(g_device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, g_frameCount, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
     /* Gets the size of the handle increment for the given type of descriptor heap.*/
     g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     /* Gain access to the back buffers.*/
@@ -207,17 +135,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     }
     /*Encapsulates a list of graphics commands for rendering. Includes APIs for instrumenting the command list execution,
     and for setting and clearing the pipeline state.*/
-    g_commandList = MakeCommandList(g_device, g_commandAllocators[g_CurrentBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
-    g_TearingSupported = CheckTearingSupport();
+    g_commandList = MakeCommandList(g_device, g_commandAllocators[g_currentBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
+    g_tearingSupported = CheckTearingSupport();
     g_fence = MakeFence(g_device);
     g_fenceEvent = MakeEventHandle();
 
-    ThrowIfFailed(g_commandList->Reset(g_commandAllocators[g_CurrentBackBufferIndex].Get(), nullptr));
+    ThrowIfFailed(g_commandList->Reset(g_commandAllocators[g_currentBackBufferIndex].Get(), nullptr));
 
     /* Temporary vertex buffer resource that is used to transfer the CPU vertex buffer data to the GPU.*/
     ComPtr<ID3D12Resource> intermediateVertexBuffer;
     UpdateBufferResource(g_commandList.Get(), &g_vertexBuffer, &intermediateVertexBuffer,_countof(g_Vertices), sizeof(VertexPosColor), g_Vertices);
-
+    g_vertexBuffer->SetName(L"Vertex Buffer Resource Heap");
+    // transition the vertex buffer data from copy destination state to vertex buffer state
+    TransitionResource(g_commandList.Get(), g_vertexBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     // Create the vertex buffer view.
     g_vertexBufferView.BufferLocation = g_vertexBuffer->GetGPUVirtualAddress();
     g_vertexBufferView.SizeInBytes = sizeof(g_Vertices);
@@ -225,6 +155,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // Upload index buffer data.
     ComPtr<ID3D12Resource> intermediateIndexBuffer;
     UpdateBufferResource(g_commandList.Get(), &g_indexBuffer, &intermediateIndexBuffer, _countof(g_Indicies), sizeof(WORD), g_Indicies);
+    g_indexBuffer->SetName(L"Index Buffer Resource Heap");
+    // transition the vertex buffer data from copy destination state to vertex buffer state
+    TransitionResource(g_commandList.Get(), g_indexBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
     // Create index buffer view.
     g_indexBufferView.BufferLocation = g_indexBuffer->GetGPUVirtualAddress();
     g_indexBufferView.Format = DXGI_FORMAT_R16_UINT;
@@ -306,19 +239,53 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     };
     g_commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
     Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
+    g_srvHeap = MakeDescriptorHeap(g_device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
 
-    g_IsInitialized = TRUE;
+    g_isInitialized = TRUE;
+    ::ShowWindow(hwnd, nCmdShow);
+    ::UpdateWindow(hwnd);
+    /* Needs the directx device intialized to function.*/
     ResizeDepthBuffer(CLIENT_WIDTH, CLIENT_HEIGHT);
-    ShowWindow(hwnd, nCmdShow);
+
     g_time.Reset();
+    
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
+    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;           // Enable Docking
+    //io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX12_Init(g_device.Get(), g_frameCount, DXGI_FORMAT_R8G8B8A8_UNORM, g_srvHeap.Get(),
+        g_srvHeap->GetCPUDescriptorHandleForHeapStart(), g_srvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    ImGui::StyleColorsDark();
+    ImGui::GetStyle().WindowRounding = 5;
+    ImGui::GetStyle().FrameRounding = 5;
+    ImGui::GetStyle().ScrollbarRounding = 5;
+    ImGui::GetStyle().WindowPadding = { 5,5 };
+    g_io = io;
+
     MSG msg = { };
     while (!g_shouldClose)
     {
         g_time.Tick();
+
         if (PeekMessage(&msg, hwnd, NULL, NULL, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        Update();
+        Render();
+
         CalculateFrameStats();
 
         if (g_appPaused) {
@@ -329,6 +296,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
 
     ::CloseHandle(g_fenceEvent);
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
 	return EXIT_SUCCESS;
 }
 void CalculateFrameStats() {
@@ -351,15 +321,22 @@ void CalculateFrameStats() {
         timeElapsed += 1;
     }
 }
+UINT CalcConstantBufferByteSize(UINT byteSize)
+{
+    return (byteSize + 255) & ~255;
+}
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-if (g_IsInitialized)
-{
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam))
+        return true;
+
     switch (uMsg)
     {
     case WM_PAINT:
-        Update();
-        Render();
+        if (!g_isInitialized) { break; }
+        //Update();
+        //Render();
         break;
     case WM_SYSKEYDOWN:
     case WM_KEYDOWN:
@@ -386,6 +363,7 @@ if (g_IsInitialized)
         int height = clientRect.bottom - clientRect.top;
         currClientWidth = width;
         currClientHeight = height;
+        if (!g_isInitialized) { break; }
         Resize(width, height);
     }
     break;
@@ -416,9 +394,6 @@ if (g_IsInitialized)
     default:
         return ::DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
-}
-else
-{ return ::DefWindowProcW(hwnd, uMsg, wParam, lParam); }
 }
 
 void EnableDebugLayer()
@@ -536,12 +511,13 @@ ComPtr<IDXGISwapChain4> MakeSwapChain(HWND hwnd, ComPtr<ID3D12CommandQueue> comm
     return swapChain4;
 }
 
-ComPtr<ID3D12DescriptorHeap> MakeDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT32 numDescriptors)
+ComPtr <ID3D12DescriptorHeap> MakeDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT32 numDescriptors, D3D12_DESCRIPTOR_HEAP_FLAGS flags)
 {
     ComPtr<ID3D12DescriptorHeap> descriptorHeap;
     D3D12_DESCRIPTOR_HEAP_DESC desc{};
     desc.NumDescriptors = numDescriptors;
     desc.Type = type;
+    desc.Flags = flags;
     ThrowIfFailed(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&descriptorHeap)));
     return descriptorHeap;
 }
@@ -629,6 +605,7 @@ void Flush(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence, U
 DirectX::XMMATRIX g_ProjectionMatrix;
 DirectX::XMMATRIX g_ViewMatrix;
 DirectX::XMMATRIX g_ModelMatrix;
+float elapsedT = NULL;
 void Update()
 {
     static UINT64 frameCounter = NULL;
@@ -651,6 +628,8 @@ void Update()
         frameCounter = NULL;
         elapsedSeconds = NULL;
     }
+
+    elapsedT += g_time.DeltaTime();
     // Update the model matrix.
     float angle = static_cast<float>(elapsedSeconds * 90.0);
     const XMVECTOR rotationAxis = XMVectorSet(0, 1, 1, 0);
@@ -665,12 +644,74 @@ void Update()
     // Update the projection matrix.
     float aspectRatio = currClientWidth / static_cast<float>(currClientHeight);
     g_ProjectionMatrix = XMMatrixPerspectiveFovLH(XMConvertToRadians(g_FoV), aspectRatio, 0.1f, 100.0f);
-}
 
+ /*   struct ObjectConstants {
+        XMMATRIX WorldViewProj = XMMatrixIdentity();
+    };
+    UINT elementByteSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
+    ComPtr<ID3D12Resource> uploadCBuffer;
+    auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    auto desc = CD3DX12_RESOURCE_DESC::Buffer(elementByteSize);
+    g_device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadCBuffer));
+    ComPtr<ID3D12Resource> uploadBuffer;
+    BYTE* mappedData = nullptr;
+    uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedData));
+    memcpy(mappedData,)*/
+}
+float v = NULL;
+char buf[MAX_NAME_STRING];
+std::string s{ "Shatabda Roy" };
+float my_color = NULL;
+static bool opt_padding = false;
+static bool enableDock = false;
+bool firstResizeDone = false;
+bool firstFrameComplete = false;
 void Render()
 {
-    auto commandAllocator = g_commandAllocators[g_CurrentBackBufferIndex];
-    auto backBuffer = g_backBuffers[g_CurrentBackBufferIndex];
+    ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+    // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
+    // because it would be confusing to have two docking targets within each others.
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
+    if (enableDock) {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(viewport->WorkSize);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+        if (!opt_padding)
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        bool useDock = true;
+        ImGui::Begin("DockSpace Demo", &useDock, window_flags);
+        if (!opt_padding)
+            ImGui::PopStyleVar();
+
+        ImGui::PopStyleVar(2);
+
+        ImGuiIO& io = ImGui::GetIO();
+        ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+        ImGui::End();
+    }
+    ImGui::Begin("First Tool", NULL);
+
+    ImGui::ColorEdit4("Color", &my_color);
+    const float my_values[] = { 0.2f, 0.1f, 1.0f, 0.5f, 0.9f, 2.2f };
+    ImGui::PlotLines("Frame Times", my_values, IM_ARRAYSIZE(my_values));
+    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Important Stuff");
+    ImGui::BeginChild("Scrolling");
+    for (int n = 0; n <= 50; n++)
+        ImGui::Text("%04d: Some text", n);
+    ImGui::EndChild();
+    
+    ImGui::End();
+    auto commandAllocator = g_commandAllocators[g_currentBackBufferIndex];
+    auto backBuffer = g_backBuffers[g_currentBackBufferIndex];
 
     commandAllocator->Reset();
     g_commandList->Reset(commandAllocator.Get(), nullptr);
@@ -683,7 +724,7 @@ void Render()
         g_commandList->ResourceBarrier(1, &barrier);
         FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(g_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-            g_CurrentBackBufferIndex, g_rtvDescriptorSize);
+            g_currentBackBufferIndex, g_rtvDescriptorSize);
         CD3DX12_CPU_DESCRIPTOR_HANDLE dsv(g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
         g_commandList->ClearRenderTargetView(rtv, clearColor, NULL, nullptr);
@@ -700,11 +741,15 @@ void Render()
         /*the scissor rectangle must be explicitly specified */
         g_commandList->RSSetScissorRects(1, &g_scissorRect);
         g_commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+
         // Update the MVP matrix
         XMMATRIX mvpMatrix = XMMatrixMultiply(g_ModelMatrix, g_ViewMatrix);
         mvpMatrix = XMMatrixMultiply(mvpMatrix, g_ProjectionMatrix);
         g_commandList->SetGraphicsRoot32BitConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix, 0);
         g_commandList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
+        g_commandList->SetDescriptorHeaps(1, g_srvHeap.GetAddressOf());
+        ImGui::Render();
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_commandList.Get());
     }
     // Present
     {
@@ -718,14 +763,21 @@ void Render()
             g_commandList.Get()
         };
         g_commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+        
+        if (g_io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault(NULL, (void*)g_commandList.Get());
+        }
+        s = buf;
+
         UINT syncInterval = g_VSync ? 1 : NULL;
-        UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : NULL;
+        UINT presentFlags = g_tearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : NULL;
         ThrowIfFailed(g_swapChain->Present(syncInterval, presentFlags));
+        //SaveWICTextureToFile(g_commandQueue.Get(), backBuffer.Get(), GUID_ContainerFormatJpeg, L"A:/Work/DEVELOPMENT/Directx12-Practice/common/RenderedFrame/currentFrame.jpg", D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
+        g_frameFenceValues[g_currentBackBufferIndex] = Signal(g_commandQueue, g_fence, g_fenceValue);
+        g_currentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
 
-        g_frameFenceValues[g_CurrentBackBufferIndex] = Signal(g_commandQueue, g_fence, g_fenceValue);
-        g_CurrentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
-
-        WaitForFenceValue(g_fence, g_frameFenceValues[g_CurrentBackBufferIndex], g_fenceEvent);
+        WaitForFenceValue(g_fence, g_frameFenceValues[g_currentBackBufferIndex], g_fenceEvent);
     }
     /*
     Clear the color and depth buffers
@@ -761,14 +813,14 @@ void Resize(UINT32 width, UINT32 height)
             // Any references to the back buffers must be released
             // before the swap chain can be resized.
             g_backBuffers[i].Reset();
-            g_frameFenceValues[i] = g_frameFenceValues[g_CurrentBackBufferIndex];
+            g_frameFenceValues[i] = g_frameFenceValues[g_currentBackBufferIndex];
         }
         DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
         ThrowIfFailed(g_swapChain->GetDesc(&swapChainDesc));
         ThrowIfFailed(g_swapChain->ResizeBuffers(g_frameCount, CLIENT_WIDTH, CLIENT_HEIGHT,
             swapChainDesc.BufferDesc.Format, swapChainDesc.Flags));
 
-        g_CurrentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
+        g_currentBackBufferIndex = g_swapChain->GetCurrentBackBufferIndex();
 
         UpdateRenderTargetViews(g_device.Get(), g_swapChain, g_rtvHeap);
         g_viewPort = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
@@ -778,11 +830,11 @@ void Resize(UINT32 width, UINT32 height)
 
 void SetFullscreen(bool fullscreen)
 {
-    if (g_Fullscreen != fullscreen)
+    if (g_fullscreen != fullscreen)
     {
-        g_Fullscreen = fullscreen;
+        g_fullscreen = fullscreen;
 
-        if (g_Fullscreen) // Switching to fullscreen.
+        if (g_fullscreen) // Switching to fullscreen.
         {
             // Store the current window dimensions so they can be restored 
             // when switching out of fullscreen state.
@@ -841,17 +893,19 @@ void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> commandList, ID3D12R
         buffer = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
         ThrowIfFailed(g_device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE,
             &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(pIntermediateResource)));
+        
         D3D12_SUBRESOURCE_DATA subresourceData = {};
         subresourceData.pData = bufferData;
         subresourceData.RowPitch = bufferSize;
         subresourceData.SlicePitch = subresourceData.RowPitch;
+        
         UpdateSubresources(commandList.Get(), *pDestinationResource, *pIntermediateResource, 0, 0, 1, &subresourceData);
     }
 }
 
 void ResizeDepthBuffer(int width, int height)
 {
-    if (g_IsInitialized) {
+    if (g_isInitialized) {
         /* Ensure that there are no command lists that could be referencing the current depth buffer are “in-flight” on the command queue.*/
         Flush(g_commandQueue, g_fence, g_fenceValue, g_fenceEvent);
         /*If the window is minimized, it is possible that either the width or the height of the client area of the window becomes 0. 
@@ -886,7 +940,7 @@ void ResizeDepthBuffer(int width, int height)
     }
 }
 
-void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource, D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState)
+void TransitionResource(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList, Microsoft::WRL::ComPtr<ID3D12Resource> resource, D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState)
 {
     CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource.Get(),beforeState, afterState);
     commandList->ResourceBarrier(1, &barrier);

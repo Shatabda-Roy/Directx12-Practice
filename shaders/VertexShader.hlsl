@@ -1,3 +1,7 @@
+struct ObjectConstants{
+	float4x4 gWorldViewProj;
+};
+ConstantBuffer<ObjectConstants> gObjConstants : register(b0);
 struct VS_INPUT
 {
 	float3 pos : POSITION;

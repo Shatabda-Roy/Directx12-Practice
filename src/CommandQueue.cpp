@@ -1,24 +1,28 @@
+#include "pch.h"
 #include "CommandQueue.h"
 
-CommandQueue::CommandQueue(Microsoft::WRL::ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type) : m_FenceValue{ NULL }, m_CommandListType{ type }, m_d3d12Device{ device }
+CommandQueue::CommandQueue(Microsoft::WRL::ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type) 
+	: m_FenceValue{ NULL }, m_CommandListType{ type }, m_d3d12Device{ device }
 {
 	D3D12_COMMAND_QUEUE_DESC desc{};
 	desc.Type = type;
+	desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+	desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+	desc.NodeMask = NULL;
+
 	ThrowIfFailed(m_d3d12Device->CreateCommandQueue(&desc, IID_PPV_ARGS(&m_d3d12CommandQueue)));
 	ThrowIfFailed(m_d3d12Device->CreateFence(m_FenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_d3d12Fence)));
 	m_FenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
 	assert(m_FenceEvent && "Failed to create fence event handle.");
 }
 
-CommandQueue::~CommandQueue()
-{
-}
+CommandQueue::~CommandQueue() {}
 
 Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> CommandQueue::GetCommandList()
 {
 	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> _commandAllocator;
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> _commandList;
-	
+	// Take the oldest allocator in the queue.
 	if (!m_CommandAllocatorQueue.empty() && IsFenceComplete(m_CommandAllocatorQueue.front().fenceValue))
 	{
 		_commandAllocator = m_CommandAllocatorQueue.front().commandAllocator;
@@ -30,6 +34,7 @@ Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> CommandQueue::GetCommandList(
 	{
 		_commandAllocator = CreateCommandAllocator();
 	}
+	// Take the oldest commandList in the queue.
 	if (!m_CommandListQueue.empty())
 	{
 		_commandList = m_CommandListQueue.front();
@@ -43,6 +48,7 @@ Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> CommandQueue::GetCommandList(
 	}
 	// Associate the command allocator with the command list so that it can be
 	// retrieved when the command list is executed.
+	/*Associates an IUnknown-derived interface with the device object and associates that interface with an application-defined GUID.*/
 	ThrowIfFailed(_commandList->SetPrivateDataInterface(__uuidof(ID3D12CommandAllocator), _commandAllocator.Get()));
 	return _commandList;
 }
@@ -70,25 +76,32 @@ uint64_t CommandQueue::ExecuteCommandList(Microsoft::WRL::ComPtr<ID3D12GraphicsC
 
 uint64_t CommandQueue::Signal()
 {
-	return 0;
+	uint64_t fenceValue = m_FenceValue++;
+	m_d3d12CommandQueue->Signal(m_d3d12Fence.Get(), fenceValue);
+	return fenceValue;
 }
 
 bool CommandQueue::IsFenceComplete(uint64_t fenceValue)
 {
-	return false;
+	return m_d3d12Fence->GetCompletedValue() >= fenceValue;
 }
 
 void CommandQueue::WaitForFenceValue(uint64_t fenceValue)
 {
+	if (!IsFenceComplete(fenceValue)) {
+		m_d3d12Fence->SetEventOnCompletion(fenceValue, m_FenceEvent);
+		::WaitForSingleObject(m_FenceEvent, DWORD_MAX);
+	}
 }
 
 void CommandQueue::Flush()
 {
+	WaitForFenceValue(Signal());
 }
 
 Microsoft::WRL::ComPtr<ID3D12CommandQueue> CommandQueue::GetD3D12CommandQueue() const
 {
-	return Microsoft::WRL::ComPtr<ID3D12CommandQueue>();
+	return m_d3d12CommandQueue;
 }
 
 Microsoft::WRL::ComPtr<ID3D12CommandAllocator> CommandQueue::CreateCommandAllocator()

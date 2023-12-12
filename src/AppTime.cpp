@@ -1,4 +1,3 @@
-#include "pch.hpp"
 #include "AppTime.h"
 
 Apparatus::Time::Time() :

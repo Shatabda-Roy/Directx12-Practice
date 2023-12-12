@@ -1,16 +1,10 @@
 #pragma once
+#include <d3d12.h>
+#include <wrl.h>  
 
-#include <d3d12.h>  // For ID3D12CommandQueue, ID3D12Device2, and ID3D12Fence
-#include <wrl.h>    // For Microsoft::WRL::ComPtr
-
-#include <cstdint>  // For uint64_t
-#include <queue>    // For std::queue
+#include <cstdint>
+#include <queue>
 #include <assert.h>
-inline void ThrowIfFailed(HRESULT result) {
-	if (FAILED(result)) {
-		throw std::exception();
-	}
-}
 class CommandQueue
 {
 public:
@@ -41,16 +35,18 @@ private:
 		Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
 	};
 
-	using CommandAllocatorQueue = std::queue<CommandAllocatorEntry>;
-	using CommandListQueue = std::queue<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2>>;
-
 	D3D12_COMMAND_LIST_TYPE                     m_CommandListType;
 	Microsoft::WRL::ComPtr<ID3D12Device2>       m_d3d12Device;
 	Microsoft::WRL::ComPtr<ID3D12CommandQueue>  m_d3d12CommandQueue;
 	Microsoft::WRL::ComPtr<ID3D12Fence>         m_d3d12Fence;
 	HANDLE                                      m_FenceEvent;
 	uint64_t                                    m_FenceValue;
+	using CommandAllocatorQueue = std::queue<CommandAllocatorEntry>;
+	/* Object that is used to queue command allocators that are “in - flight” on the GPU queue.
+	As soon as the fence value that is associated with the CommandAllocatorEntry has been reached, the command allocator can be reused.
+	*/
 	CommandAllocatorQueue                       m_CommandAllocatorQueue;
+	using CommandListQueue = std::queue<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2>>;
+	/* Used to queue command lists that can be reused*/
 	CommandListQueue                            m_CommandListQueue;
 };
-

@@ -4,11 +4,14 @@
 #include <wrl.h>
 #include <memory>
 #include <string>
-#include "DirectXMath.h"
+#include <chrono>
 #include <d3dcompiler.h>
+#include <DirectXMath.h>
+
+#include "AppTime.h"
 #include "CommandQueue.h"
 #include "ErrorHelpers.h"
-#include <chrono>
+
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
@@ -22,7 +25,6 @@ using namespace DirectX;
 #undef max
 #endif
 
-
 class Application
 {
 public:
@@ -35,20 +37,38 @@ public:
 	void SetHWND(HWND hwnd) {
 		m_hWnd = hwnd;
 	}
+	RECT rc{};
+	UINT GetClientWidth() {
+		GetClientRect(m_hWnd, &rc);
+		auto width = rc.right - rc.left;
+		return width;
+	}
+	UINT GetClientHeight() {
+		GetClientRect(m_hWnd, &rc);
+		auto height = rc.bottom - rc.top;
+		return height;
+	}
+	Apparatus::Time AppTime;
 	void Initiate();
 	void Update();
 	void Destroy();
+	void Resize(UINT32 width, UINT32 height);
 protected:
-
 	/* The number of swap chain back buffers*/
 	static const UINT16 FrameCount = 3;
+	float FoV = 45;
 	/*Depending on the flip model of the swap chain,
 	the index of the current back buffer in the swap chain may not be sequential.*/
 	UINT                              CurrentBackBufferIndex = NULL;
 	/*In order to correctly offset the index into the descriptor heap,
 	the size of a single element in the descriptor heap needs to be queried during initialization*/
 	bool isTearingSupported		      = false;
-	bool g_isInitialized = false;
+	bool isInitialized = false;
+	bool VSync = true;
+	/*The viewport and scissor rect variables are used to initialize
+	the rasterizer stage of the rendering pipeline.*/
+	D3D12_VIEWPORT                    ViewPort;
+	D3D12_RECT                        ScissorRect;
 	UINT                              rtvDescriptorSize;
 	ComPtr<IDXGIFactory7>			  dxgiFactory;
 	ComPtr<ID3D12Device2>			  d3d12Device;
@@ -68,20 +88,20 @@ protected:
 	ComPtr<IDXGISwapChain4>           SwapChain;
 	HWND							  m_hWnd = NULL;
 	//                                Synchronization objects
-	ComPtr<ID3D12Fence>               g_fence;
-	UINT64                            g_fenceValue = NULL;
+	ComPtr<ID3D12Fence>               Fence;
+	UINT64                            FenceValue = NULL;
 	/*Used to keep track of the fence values that were used to signal the command queue for a particular frame.*/
-	UINT64                            g_frameFenceValues[FrameCount] = {};
+	UINT64                            FrameFenceValues[FrameCount] = {};
 	/*A handle to an OS event object that will be used to receive the notification that the fence has reached a specific value.*/
-	HANDLE                            g_fenceEvent;
+	HANDLE                            FenceEvent;
 	// App resources.
 	/* Destination resource for the vertex buffer data and is used for rendering the cube geometry.*/
-	ComPtr<ID3D12Resource>            g_vertexBuffer;
-	ComPtr<ID3D12Resource>            g_indexBuffer;
-	ComPtr<ID3D12Resource>            g_depthBuffer;
+	ComPtr<ID3D12Resource>            VertexBuffer;
+	ComPtr<ID3D12Resource>            IndexBuffer;
+	ComPtr<ID3D12Resource>            DepthBuffer;
 	/* Used to tell the Input Assembler stage where the vertices are stored in GPU memory.*/
-	D3D12_VERTEX_BUFFER_VIEW          g_vertexBufferView;
-	D3D12_INDEX_BUFFER_VIEW           g_indexBufferView;
+	D3D12_VERTEX_BUFFER_VIEW          VertexBufferView;
+	D3D12_INDEX_BUFFER_VIEW           IndexBufferView;
 private:
 	Application(){}
 	void InitiateDebugLayer();
